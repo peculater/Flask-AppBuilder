@@ -963,14 +963,14 @@ class BaseSecurityManager(AbstractSecurityManager):
                         memberof_set = set(self.ldap_extract_list(
                                              ldap_user_info,
                                              self.auth_ldap_memberof_field,
-                                             []
-                                          ))
+                                             [])
+                                          )
+                        grouprolemap_dictset = { k:(set(v) if isinstance(v, list) else set([v]))
+                                                 for k,v in self.auth_ldap_group_role_map.items() }
                         user.roles.extend(
-                            [ self.find_role(role) for role in self.auth_ldap_group_role_map
-                                                   if memberof_set.intersection(set(
-                                                   [i if isinstance(i, list) else [i]
-                                                   for i in self.auth_ldap_group_role_map[role]]))
-                            ])
+                            [ self.find_role(role) for role in grouprolemap_dictset 
+                              if memberof_set.intersection(grouprolemap_dictset[role]) ]
+                        )
                         # de-duplicate, in case someone manually assigned a role that
                         # is also assigned via ldap group membership
                         user.roles = list(dict.fromkeys(user.roles))

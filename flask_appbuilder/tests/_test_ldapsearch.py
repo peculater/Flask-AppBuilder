@@ -144,9 +144,13 @@ class LDAPSearchTestCase(unittest.TestCase):
 
         self.app.config["AUTH_LDAP_SEARCH_FILTER"] = None
         self.app.config["AUTH_LDAP_MEMBEROF_FIELD"] = "memberOf" 
+        self.app.config["AUTH_LDAP_GROUP_ROLE_MAP"] = {
+            "RoleA": "cn=group,ou=groups,o=test",
+            "RoleB": [ "cn=group,ou=groups,o=test", "cn=groupB,ou=groups,o=test" ],
+            "RoleNO": "cn=notagroup,ou=groups,o=test",
+        }
         self.appbuilder = AppBuilder(self.app, self.db.session)
         user = self.appbuilder.sm._search_ldap(ldap, con, "alice")
-        print(user)
         alicegroups = set(self.appbuilder.sm.ldap_extract_list(
                         dict(user[0][1]),
                         self.appbuilder.sm.auth_ldap_memberof_field,
@@ -156,14 +160,17 @@ class LDAPSearchTestCase(unittest.TestCase):
             "cn=group,ou=groups,o=test",
             "cn=groupB,ou=groups,o=test"},
              alicegroups)
+        alllists_dict = { k:(set(v) if isinstance(v, list) else set([v])) for k,v in self.appbuilder.sm.auth_ldap_group_role_map.items()}
+        aliceroles=[ role for role in alllists_dict
+                    if alicegroups.intersection(alllists_dict[role])]
+        self.assertEqual([
+            "RoleA",
+            "RoleB"],
+             aliceroles)
 
     def test_ldapauthuser(self):
         con = ldap.initialize("ldap://localhost/")
         con.simple_bind_s("cn=manager,ou=example,o=test", "ldaptest")
 
-        self.app.config["AUTH_LDAP_GROUP_ROLE_MAP"] = {
-            "RoleA": "cn=group,ou=groups,o=test",
-            "RoleB": [ "cn=groupB,ou=groups,o=test" ]
-        }
         self.appbuilder = AppBuilder(self.app, self.db.session)
 #        user = self.appbuilder.sm.auth_user_ldap(ldap, con, "alice")
