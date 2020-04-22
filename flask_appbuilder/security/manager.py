@@ -242,6 +242,7 @@ class BaseSecurityManager(AbstractSecurityManager):
             app.config.setdefault("AUTH_LDAP_FIRSTNAME_FIELD", "givenName")
             app.config.setdefault("AUTH_LDAP_LASTNAME_FIELD", "sn")
             app.config.setdefault("AUTH_LDAP_EMAIL_FIELD", "mail")
+            app.config.setdefault("AUTH_LDAP_MEMBEROF_FIELD", "memberOf")
 
         if self.auth_type == AUTH_OID:
             self.oid = OpenID(app)
@@ -388,6 +389,10 @@ class BaseSecurityManager(AbstractSecurityManager):
         return self.appbuilder.get_app.config["AUTH_LDAP_EMAIL_FIELD"]
 
     @property
+    def auth_ldap_memberof_field(self):
+        return self.appbuilder.get_app.config["AUTH_LDAP_MEMBEROF_FIELD"]
+
+    @property
     def auth_ldap_bind_first(self):
         return self.appbuilder.get_app.config["AUTH_LDAP_BIND_FIRST"]
 
@@ -414,6 +419,10 @@ class BaseSecurityManager(AbstractSecurityManager):
     @property
     def auth_ldap_tls_keyfile(self):
         return self.appbuilder.get_app.config["AUTH_LDAP_TLS_KEYFILE"]
+
+    @property
+    def auth_ldap_group_role_map(self):
+        return self.appbuilder.get_app.config["AUTH_LDAP_GROUP_ROLE_MAP"]
 
     @property
     def openid_providers(self):
@@ -796,6 +805,7 @@ class BaseSecurityManager(AbstractSecurityManager):
                 self.auth_ldap_firstname_field,
                 self.auth_ldap_lastname_field,
                 self.auth_ldap_email_field,
+                self.auth_ldap_memberof_field
             ],
         )
         if user:
@@ -852,6 +862,13 @@ class BaseSecurityManager(AbstractSecurityManager):
         if not ldap_dict.get(field):
             return fallback
         return ldap_dict[field][0].decode("utf-8") or fallback
+
+    @staticmethod
+    def ldap_extract_list(ldap_dict, field, fallback):
+        if not ldap_dict.get(field):
+            return fallback
+        return [x if isinstance(x, str) else x.decode("utf-8")
+                for x in ldap_dict[field]] or fallback
 
     def auth_user_ldap(self, username, password):
         """
@@ -913,14 +930,16 @@ class BaseSecurityManager(AbstractSecurityManager):
                 # If user does not exist on the DB and not self user registration, go away
                 if not user and not self.auth_user_registration:
                     return None
-                # User does not exist, create one if self registration.
-                elif not user and self.auth_user_registration:
+                # If we need to connect back to LDAP for more info, do that here
+                elif (not user and self.auth_user_registration or
+                     user and self.auth_ldap_group_role_map):
                     self._bind_indirect_user(ldap, con)
                     new_user = self._search_ldap(ldap, con, username)
                     if not new_user:
                         log.warning(LOGMSG_WAR_SEC_NOLDAP_OBJ.format(username))
                         return None
                     ldap_user_info = new_user[0][1]
+                    # User does not exist, create one if self registration.
                     if self.auth_user_registration and user is None:
                         user = self.add_user(
                             username=username,
@@ -937,6 +956,24 @@ class BaseSecurityManager(AbstractSecurityManager):
                             ),
                             role=self.find_role(self.auth_user_registration_role),
                         )
+                    # Assign additional roles from LDAP groups.
+                    # We match the group from the memberOf attribute on the ldap object
+                    # to the role in the mapping, and add them to the user object
+                    if user and self.auth_ldap_group_role_map:
+                        memberof_set = set(self.ldap_extract_list(
+                                             ldap_user_info,
+                                             self.auth_ldap_memberof_field,
+                                             []
+                                          ))
+                        user.roles.extend(
+                            [ self.find_role(role) for role in self.auth_ldap_group_role_map
+                                                   if memberof_set.intersection(set(
+                                                   [i if isinstance(i, list) else [i]
+                                                   for i in self.auth_ldap_group_role_map[role]]))
+                            ])
+                        # de-duplicate, in case someone manually assigned a role that
+                        # is also assigned via ldap group membership
+                        user.roles = list(dict.fromkeys(user.roles))
 
                 self.update_user_auth_stat(user)
                 return user

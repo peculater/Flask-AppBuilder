@@ -7,11 +7,9 @@ import jinja2
 import ldap
 from mockldap import MockLdap
 
-
 logging.basicConfig(format="%(asctime)s:%(levelname)s:%(name)s:%(message)s")
 logging.getLogger().setLevel(logging.DEBUG)
 log = logging.getLogger(__name__)
-
 
 class LDAPSearchTestCase(unittest.TestCase):
 
@@ -25,7 +23,8 @@ class LDAPSearchTestCase(unittest.TestCase):
         "cn=alice,ou=example,o=test",
         {
             "cn": ["alice"],
-            "memberOf": ["cn=group,ou=groups,o=test"],
+            "memberOf": ["cn=group,ou=groups,o=test",
+                         "cn=groupB,ou=groups,o=test"],
             "userPassword": ["alicepw"],
         },
     )
@@ -33,8 +32,12 @@ class LDAPSearchTestCase(unittest.TestCase):
         "cn=group,ou=groups,o=test",
         {"cn": ["group"], "member": ["cn=alice,ou=example,o=test"]},
     )
+    groupB = (
+        "cn=groupB,ou=groups,o=test",
+        {"cn": ["groupB"], "member": ["cn=alice,ou=example,o=test"]},
+    )
 
-    directory = dict([top, example, group, manager, alice])
+    directory = dict([top, example, group, groupB, manager, alice])
 
     @classmethod
     def setUpClass(cls):
@@ -65,6 +68,7 @@ class LDAPSearchTestCase(unittest.TestCase):
         self.app.config["AUTH_LDAP_FIRSTNAME_FIELD"] = None
         self.app.config["AUTH_LDAP_LASTNAME_FIELD"] = None
         self.app.config["AUTH_LDAP_EMAIL_FIELD"] = None
+        self.app.config["AUTH_LDAP_MEMBEROF_FIELD"] = None
 
     def tearDown(self):
         self.mockldap.stop()
@@ -90,7 +94,7 @@ class LDAPSearchTestCase(unittest.TestCase):
         )
         search_s_call = (
             "search_s",
-            ("ou=example,o=test", 2, "(cn=alice)", [None, None, None]),
+            ("ou=example,o=test", 2, "(cn=alice)", [None, None, None, None]),
             {},
         )
 
@@ -122,7 +126,7 @@ class LDAPSearchTestCase(unittest.TestCase):
                 "ou=example,o=test",
                 2,
                 "(&(memberOf=cn=group,ou=groups,o=test)(cn=alice))",
-                [None, None, None],
+                [None, None, None, None],
             ),
             {},
         )
@@ -133,3 +137,33 @@ class LDAPSearchTestCase(unittest.TestCase):
             [initialize_call, simple_bind_s_call, search_s_call],
         )
         self.assertEqual(user[0][0], self.alice[0])
+
+    def test_ldapextractlist(self):
+        con = ldap.initialize("ldap://localhost/")
+        con.simple_bind_s("cn=manager,ou=example,o=test", "ldaptest")
+
+        self.app.config["AUTH_LDAP_SEARCH_FILTER"] = None
+        self.app.config["AUTH_LDAP_MEMBEROF_FIELD"] = "memberOf" 
+        self.appbuilder = AppBuilder(self.app, self.db.session)
+        user = self.appbuilder.sm._search_ldap(ldap, con, "alice")
+        print(user)
+        alicegroups = set(self.appbuilder.sm.ldap_extract_list(
+                        dict(user[0][1]),
+                        self.appbuilder.sm.auth_ldap_memberof_field,
+                        []
+                        ))
+        self.assertEqual({
+            "cn=group,ou=groups,o=test",
+            "cn=groupB,ou=groups,o=test"},
+             alicegroups)
+
+    def test_ldapauthuser(self):
+        con = ldap.initialize("ldap://localhost/")
+        con.simple_bind_s("cn=manager,ou=example,o=test", "ldaptest")
+
+        self.app.config["AUTH_LDAP_GROUP_ROLE_MAP"] = {
+            "RoleA": "cn=group,ou=groups,o=test",
+            "RoleB": [ "cn=groupB,ou=groups,o=test" ]
+        }
+        self.appbuilder = AppBuilder(self.app, self.db.session)
+#        user = self.appbuilder.sm.auth_user_ldap(ldap, con, "alice")
